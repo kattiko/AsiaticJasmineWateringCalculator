@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Star Jasmine Auto-Watering Timer Calculator</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#60a5fa;--muted:#94a3b8;--glass: rgba(255,255,255,0.03)}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial}
+    body{background:linear-gradient(180deg,#071028 0%, #081827 100%);color:#e6eef8;display:flex;align-items:center;justify-content:center;padding:32px}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));backdrop-filter: blur(6px);border-radius:14px;padding:22px;max-width:760px;width:100%;box-shadow:0 8px 30px rgba(2,6,23,0.7);border:1px solid rgba(255,255,255,0.03)}
+    h1{font-size:18px;margin:0 0 8px}
+    p.lead{margin:0 0 18px;color:var(--muted);font-size:13px}
+    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+    label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+    input[type=number], select, input[type=range]{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit;font-size:14px}
+    .full{grid-column:1/-1}
+    .row{display:flex;gap:8px}
+    button{background:linear-gradient(90deg,var(--accent),#3b82f6);color:#04203a;border:none;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+    .result{margin-top:16px;padding:12px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.02));border:1px solid rgba(255,255,255,0.02)}
+    .muted{color:var(--muted);font-size:13px}
+    .highlight{background:linear-gradient(90deg,rgba(96,165,250,0.15),rgba(59,130,246,0.15));padding:12px;border-radius:8px;margin-top:10px;border:1px solid rgba(96,165,250,0.2)}
+    footer{margin-top:14px;color:var(--muted);font-size:13px}
+    @media (max-width:720px){.grid{grid-template-columns:1fr}.row{flex-direction:column}}
+  </style>
+</head>
+<body>
+  <main class="card" role="main">
+    <h1>Star Jasmine Auto-Watering Timer Calculator</h1>
+    <p class="lead" id="leadText">Calculates optimal timer interval. Flow rate: <strong>80 mL/min</strong>.</p>
+
+    <div class="grid">
+      <div>
+        <label for="length">Plant length (cm)</label>
+        <input id="length" type="number" min="5" step="1" value="30" />
+      </div>
+      <div>
+        <label for="season">Season</label>
+        <select id="season">
+          <option value="summer">Summer (active)</option>
+          <option value="winter">Winter (dormant)</option>
+        </select>
+      </div>
+      <div>
+        <label for="rh">Relative Humidity (RH) — %</label>
+        <input id="rh" type="range" min="10" max="90" step="1" value="45" />
+        <div id="rhVal" class="muted">45%</div>
+      </div>
+      <div>
+        <label for="reservoir">Reservoir size (liters)</label>
+        <input id="reservoir" type="number" min="1" step="0.5" value="15" />
+      </div>
+      <div>
+        <label for="evap">Evaporation rate (mm/day)</label>
+        <select id="evap">
+          <option value="1">Low (1 mm/day)</option>
+          <option value="1.5" selected>Moderate (1.5 mm/day)</option>
+          <option value="3">High (3 mm/day)</option>
+        </select>
+      </div>
+      <div class="full row"><button id="calc">Calculate Timer Settings</button><button id="reset" style="background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted);">Reset</button></div>
+    </div>
+
+    <section class="result" aria-live="polite">
+      <div id="outputTitle" style="font-weight:700">Timer Configuration</div>
+      <div id="results" style="margin-top:8px">Enter values and press Calculate.</div>
+      <div style="margin-top:10px" class="muted">Formula: <code id="formula"></code></div>
+    </section>
+
+    <footer>
+      <div class="muted">Note: Values are estimates. Actual watering may vary; always monitor soil moisture and adjust as needed.</div>
+    </footer>
+  </main>
+
+  <script>
+    const FLOW_RATE = 80; // mL/min
+    const TIMER_DURATION = 84; // seconds
+    const ML_PER_CYCLE = (FLOW_RATE / 60) * TIMER_DURATION; // 13.333... mL per cycle
+    const HOURS_PER_WEEK = 168;
+
+    const lengthEl = document.getElementById('length');
+    const seasonEl = document.getElementById('season');
+    const rhEl = document.getElementById('rh');
+    const rhVal = document.getElementById('rhVal');
+    const evapEl = document.getElementById('evap');
+    const reservoirEl = document.getElementById('reservoir');
+    const results = document.getElementById('results');
+    const calcBtn = document.getElementById('calc');
+    const resetBtn = document.getElementById('reset');
+    const formulaEl = document.getElementById('formula');
+    const leadText = document.getElementById('leadText');
+
+    // Update lead text with dynamic timer info
+    leadText.innerHTML = `Calculates optimal timer interval for a ${TIMER_DURATION}-second watering system. Flow rate: <strong>${FLOW_RATE} mL/min</strong> (${ML_PER_CYCLE.toFixed(2)} mL per ${TIMER_DURATION}-second cycle).`;
+
+    rhEl.addEventListener('input', ()=> rhVal.textContent = rhEl.value + '%');
+
+    function clamp(v,a,b){return Math.min(b,Math.max(a,v));}
+
+    function computePlantWater(L, season, RH){
+      const baseSummer = 150;
+      const baseWinter = 80;
+      const exponent = 0.75;
+      const base = (season === 'summer') ? baseSummer : baseWinter;
+      const scale = Math.pow(L / 30, exponent);
+      const adj = 1 + 0.01 * (50 - RH);
+      const weekly = base * scale * adj;
+      return {weekly, scale, adj};
+    }
+
+    function reservoirSurfaceArea(liters){
+      const m3 = liters / 1000;
+      const d = Math.pow((4 * m3) / Math.PI, 1/3);
+      const area = Math.PI * Math.pow(d/2, 2);
+      return area;
+    }
+
+    calcBtn.addEventListener('click', ()=>{
+      const L = Number(lengthEl.value);
+      const season = seasonEl.value;
+      const RH = clamp(Number(rhEl.value), 0, 100);
+      const evapRate = Number(evapEl.value);
+      const reservoirLiters = Math.max(Number(reservoirEl.value), 0.1);
+
+      if(!L || L <= 0){results.innerHTML = '<span style="color:#fca5a5">Enter a valid plant length.</span>';return;}
+
+      const plant = computePlantWater(L, season, RH);
+
+      const A = reservoirSurfaceArea(reservoirLiters);
+      const evapDaily = evapRate * A * 1000;
+      const evapWeekly = evapDaily * 7;
+
+      // Calculate timer settings (based on PLANT needs only)
+      const cyclesPerWeek = plant.weekly / ML_PER_CYCLE;
+      const intervalHours = HOURS_PER_WEEK / cyclesPerWeek;
+
+      // Calculate reservoir duration (plant consumption + evaporation)
+      const totalWeeklyLoss = plant.weekly + evapWeekly;
+      const reservoirML = reservoirLiters * 1000;
+      const weeksUntilEmpty = reservoirML / totalWeeklyLoss;
+
+      const fmt = n => Math.round(n);
+
+      results.innerHTML = `
+        <div><strong>Plant Water Needs:</strong> ${fmt(plant.weekly)} mL/week</div>
+        
+        <div class="highlight">
+          <div style="font-size:15px;font-weight:700;margin-bottom:8px">⏱️ TIMER SETTING</div>
+          <div style="font-size:16px;font-weight:700;color:var(--accent)">Run every ${intervalHours.toFixed(2)} hours</div>
+          <div style="margin-top:6px;font-size:13px;color:var(--muted)">
+            (${cyclesPerWeek.toFixed(1)} cycles/week × ${ML_PER_CYCLE.toFixed(2)} mL = ${fmt(cyclesPerWeek * ML_PER_CYCLE)} mL/week)
+          </div>
+        </div>
+        
+        <div style="margin-top:12px"><strong>Reservoir Refill Schedule:</strong></div>
+        <div>• Reservoir evaporation: ${fmt(evapWeekly)} mL/week (${evapRate} mm/day)</div>
+        <div>• Total weekly loss (plant + evaporation): ${fmt(totalWeeklyLoss)} mL/week</div>
+        <div>• ${reservoirLiters} L reservoir lasts approximately <strong>${weeksUntilEmpty.toFixed(1)} weeks</strong></div>
+        
+        <div style="margin-top:10px;color:var(--muted);font-size:12px">
+          Note: Timer setting is based on plant needs only. Evaporation from reservoir affects refill frequency.
+        </div>
+      `;
+
+      formulaEl.textContent = `Timer: Cycles/week = PlantNeeds ÷ ${ML_PER_CYCLE.toFixed(2)}; Interval = ${HOURS_PER_WEEK} ÷ Cycles/week | Reservoir: Weeks = Capacity ÷ (PlantNeeds + Evaporation)`;
+    });
+
+    resetBtn.addEventListener('click', ()=>{
+      lengthEl.value = 30; 
+      seasonEl.value = 'summer'; 
+      rhEl.value = 45; 
+      rhVal.textContent = '45%'; 
+      evapEl.value = 1.5; 
+      reservoirEl.value = 13; 
+      results.innerHTML = 'Enter values and press Calculate.'; 
+      formulaEl.textContent = '';
+    });
+
+    calcBtn.click();
+  </script>
+</body>
+</html>
