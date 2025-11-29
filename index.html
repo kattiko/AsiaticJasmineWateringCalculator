@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Star Jasmine Auto-Watering Timer Calculator</title>
+  <title>Star Jasmine Watering Calculator</title>
   <style>
     :root{--bg:#0f1724;--card:#0b1220;--accent:#60a5fa;--muted:#94a3b8;--glass: rgba(255,255,255,0.03)}
     html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial}
@@ -21,18 +21,29 @@
     .muted{color:var(--muted);font-size:13px}
     .highlight{background:linear-gradient(90deg,rgba(96,165,250,0.15),rgba(59,130,246,0.15));padding:12px;border-radius:8px;margin-top:10px;border:1px solid rgba(96,165,250,0.2)}
     footer{margin-top:14px;color:var(--muted);font-size:13px}
+    .tooltip{font-size:12px;color:var(--muted);margin-top:4px;font-style:italic}
     @media (max-width:720px){.grid{grid-template-columns:1fr}.row{flex-direction:column}}
   </style>
 </head>
 <body>
   <main class="card" role="main">
-    <h1>Star Jasmine Auto-Watering Timer Calculator</h1>
-    <p class="lead" id="leadText">Calculates optimal timer interval. Flow rate: <strong>80 mL/min</strong>.</p>
+    <h1>Star Jasmine Watering Calculator</h1>
+    <p class="lead">Calculates optimal watering schedule based on pot size, plant height, and environmental conditions.</p>
 
     <div class="grid">
       <div>
-        <label for="length">Plant length (cm)</label>
+        <label for="potDiameter">Pot diameter (cm)</label>
+        <input id="potDiameter" type="number" min="10" max="50" step="1" value="30" />
+        <div class="tooltip">Inner diameter of the pot</div>
+      </div>
+      <div>
+        <label for="length">Plant height (cm)</label>
         <input id="length" type="number" min="5" step="1" value="30" />
+        <div class="tooltip">Tallest trained height</div>
+      </div>
+      <div>
+        <label for="temp">Temperature (°C)</label>
+        <input id="temp" type="number" min="15" max="35" step="1" value="20" />
       </div>
       <div>
         <label for="season">Season</label>
@@ -47,8 +58,12 @@
         <div id="rhVal" class="muted">45%</div>
       </div>
       <div>
-        <label for="reservoir">Reservoir size (liters)</label>
-        <input id="reservoir" type="number" min="1" step="0.5" value="15" />
+        <label for="light">Light Exposure</label>
+        <select id="light">
+          <option value="0.7">Low (north window)</option>
+          <option value="1.0" selected>Medium (east/west window)</option>
+          <option value="1.4">Bright (south window/direct)</option>
+        </select>
       </div>
       <div>
         <label for="evap">Evaporation rate (mm/day)</label>
@@ -58,54 +73,92 @@
           <option value="3">High (3 mm/day)</option>
         </select>
       </div>
-      <div class="full row"><button id="calc">Calculate Timer Settings</button><button id="reset" style="background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted);">Reset</button></div>
+      <div>
+        <label for="reservoir">Reservoir size (liters)</label>
+        <input id="reservoir" type="number" min="1" step="0.5" value="15" />
+      </div>
+      <div>
+        <label for="mlPerWatering">Water per watering (mL)</label>
+        <input id="mlPerWatering" type="number" min="10" step="5" value="105" />
+        <div class="tooltip">Amount delivered each cycle</div>
+      </div>
+      <div class="full row">
+        <button id="calc">Calculate Watering Schedule</button>
+        <button id="reset" style="background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted);">Reset</button>
+      </div>
     </div>
 
     <section class="result" aria-live="polite">
-      <div id="outputTitle" style="font-weight:700">Timer Configuration</div>
+      <div id="outputTitle" style="font-weight:700">Watering Schedule</div>
       <div id="results" style="margin-top:8px">Enter values and press Calculate.</div>
       <div style="margin-top:10px" class="muted">Formula: <code id="formula"></code></div>
     </section>
 
     <footer>
-      <div class="muted">Note: Values are estimates. Actual watering may vary; always monitor soil moisture and adjust as needed.</div>
+      <div class="muted"><strong>Watering Tip:</strong> Star Jasmine prefers soil to dry out between waterings. Water when the top inch of soil feels dry to the touch. This calculator provides estimates - always monitor soil moisture and adjust as needed.</div>
     </footer>
   </main>
 
   <script>
-    const FLOW_RATE = 64.28574; // mL/min
-    const TIMER_DURATION = 84; // seconds
-    const ML_PER_CYCLE = (FLOW_RATE / 60) * TIMER_DURATION; // 13.333... mL per cycle
     const HOURS_PER_WEEK = 168;
 
+    const potDiameterEl = document.getElementById('potDiameter');
     const lengthEl = document.getElementById('length');
+    const tempEl = document.getElementById('temp');
     const seasonEl = document.getElementById('season');
     const rhEl = document.getElementById('rh');
     const rhVal = document.getElementById('rhVal');
+    const lightEl = document.getElementById('light');
     const evapEl = document.getElementById('evap');
     const reservoirEl = document.getElementById('reservoir');
+    const mlPerWateringEl = document.getElementById('mlPerWatering');
     const results = document.getElementById('results');
     const calcBtn = document.getElementById('calc');
     const resetBtn = document.getElementById('reset');
     const formulaEl = document.getElementById('formula');
-    const leadText = document.getElementById('leadText');
-
-    // Update lead text with dynamic timer info
-    leadText.innerHTML = `Calculates optimal timer interval for a ${TIMER_DURATION}-second watering system. Flow rate: <strong>${FLOW_RATE} mL/min</strong> (${ML_PER_CYCLE.toFixed(2)} mL per ${TIMER_DURATION}-second cycle).`;
 
     rhEl.addEventListener('input', ()=> rhVal.textContent = rhEl.value + '%');
 
     function clamp(v,a,b){return Math.min(b,Math.max(a,v));}
 
-    function computePlantWater(L, season, RH){
-      const baseSummer = 150;
-      const baseWinter = 80;
-      const exponent = 0.75;
-      const base = (season === 'summer') ? baseSummer : baseWinter;
-      const scale = Math.pow(L / 30, exponent);
-      const adj = 1 + 0.01 * (50 - RH);
-      const weekly = base * scale * adj;
-      return {weekly, scale, adj};
+    function computePlantWater(potDiameter, plantHeight, season, RH, temperature, lightFactor){
+      // Calculate pot surface area (cm²)
+      const potRadius = potDiameter / 2;
+      const potArea = Math.PI * potRadius * potRadius;
+      
+      // Base water needs per cm² of pot surface per week (mL/cm²/week)
+      // Calibrated to real-world needs
+      const baseWaterPerCm2 = {
+        summer: 0.60,  // ~425 mL/week for 30cm pot at defaults
+        winter: 0.32   // ~225 mL/week for 30cm pot at defaults
+      };
+      
+      // Start with pot-area-based calculation
+      const baseWater = baseWaterPerCm2[season] * potArea;
+      
+      // Plant height scaling factor (smaller impact than pot size)
+      // Uses exponent of 0.5 to give moderate scaling
+      const heightScale = Math.pow(plantHeight / 30, 0.5);
+      
+      // Temperature factor: exponential relationship
+      // At 20°C: 1.0x, at 25°C: 1.28x, at 30°C: 1.63x
+      const tempFactor = Math.pow(1.05, temperature - 20);
+      
+      // Refined humidity adjustment (non-linear)
+      // Lower RH = more evaporation = more water needed
+      const humidityFactor = 1 + 0.015 * (50 - RH);
+      
+      // Combine all factors
+      const weekly = baseWater * heightScale * tempFactor * humidityFactor * lightFactor;
+      
+      return {
+        weekly,
+        potArea,
+        heightScale,
+        tempFactor,
+        humidityFactor,
+        lightFactor
+      };
     }
 
     function reservoirSurfaceArea(liters){
@@ -116,23 +169,39 @@
     }
 
     calcBtn.addEventListener('click', ()=>{
-      const L = Number(lengthEl.value);
+      const potDiameter = Number(potDiameterEl.value);
+      const plantHeight = Number(lengthEl.value);
+      const temperature = Number(tempEl.value);
       const season = seasonEl.value;
       const RH = clamp(Number(rhEl.value), 0, 100);
+      const lightFactor = Number(lightEl.value);
       const evapRate = Number(evapEl.value);
       const reservoirLiters = Math.max(Number(reservoirEl.value), 0.1);
+      const mlPerWatering = Number(mlPerWateringEl.value);
 
-      if(!L || L <= 0){results.innerHTML = '<span style="color:#fca5a5">Enter a valid plant length.</span>';return;}
+      if(!potDiameter || potDiameter <= 0){
+        results.innerHTML = '<span style="color:#fca5a5">Enter a valid pot diameter.</span>';
+        return;
+      }
+      if(!plantHeight || plantHeight <= 0){
+        results.innerHTML = '<span style="color:#fca5a5">Enter a valid plant height.</span>';
+        return;
+      }
+      if(!mlPerWatering || mlPerWatering <= 0){
+        results.innerHTML = '<span style="color:#fca5a5">Enter a valid water amount per watering.</span>';
+        return;
+      }
 
-      const plant = computePlantWater(L, season, RH);
+      const plant = computePlantWater(potDiameter, plantHeight, season, RH, temperature, lightFactor);
 
       const A = reservoirSurfaceArea(reservoirLiters);
       const evapDaily = evapRate * A * 1000;
       const evapWeekly = evapDaily * 7;
 
-      // Calculate timer settings (based on PLANT needs only)
-      const cyclesPerWeek = plant.weekly / ML_PER_CYCLE;
-      const intervalHours = HOURS_PER_WEEK / cyclesPerWeek;
+      // Calculate watering schedule
+      const wateringsPerWeek = plant.weekly / mlPerWatering;
+      const intervalHours = HOURS_PER_WEEK / wateringsPerWeek;
+      const intervalDays = intervalHours / 24;
 
       // Calculate reservoir duration (plant consumption + evaporation)
       const totalWeeklyLoss = plant.weekly + evapWeekly;
@@ -141,14 +210,31 @@
 
       const fmt = n => Math.round(n);
 
+      // Validation warnings
+      let warnings = '';
+      if(plant.weekly < 200) {
+        warnings = '<div style="color:#fbbf24;margin-top:8px">⚠️ Warning: Calculated water needs seem low. Check your inputs.</div>';
+      }
+      if(plant.weekly > 3000) {
+        warnings = '<div style="color:#fbbf24;margin-top:8px">⚠️ Warning: Calculated water needs seem very high. Verify pot size and conditions.</div>';
+      }
+
       results.innerHTML = `
         <div><strong>Plant Water Needs:</strong> ${fmt(plant.weekly)} mL/week</div>
+        <div class="muted" style="font-size:12px;margin-top:4px">
+          Pot area: ${fmt(plant.potArea)} cm² | Height factor: ${plant.heightScale.toFixed(2)}x | 
+          Temp factor: ${plant.tempFactor.toFixed(2)}x | Humidity factor: ${plant.humidityFactor.toFixed(2)}x | 
+          Light factor: ${plant.lightFactor.toFixed(2)}x
+        </div>
         
         <div class="highlight">
-          <div style="font-size:15px;font-weight:700;margin-bottom:8px">⏱️ TIMER SETTING</div>
-          <div style="font-size:16px;font-weight:700;color:var(--accent)">Run every ${intervalHours.toFixed(2)} hours</div>
+          <div style="font-size:15px;font-weight:700;margin-bottom:8px">💧 WATERING SCHEDULE</div>
+          <div style="font-size:16px;font-weight:700;color:var(--accent)">Water ${mlPerWatering} mL every ${intervalHours.toFixed(1)} hours</div>
           <div style="margin-top:6px;font-size:13px;color:var(--muted)">
-            (${cyclesPerWeek.toFixed(1)} cycles/week × ${ML_PER_CYCLE.toFixed(2)} mL = ${fmt(cyclesPerWeek * ML_PER_CYCLE)} mL/week)
+            (${wateringsPerWeek.toFixed(1)} times/week × ${mlPerWatering} mL = ${fmt(wateringsPerWeek * mlPerWatering)} mL/week)
+          </div>
+          <div style="margin-top:8px;font-size:12px;color:#fbbf24">
+            💡 Water when top inch of soil feels dry, approximately every ${Math.round(intervalDays)} days (${Math.round(intervalHours)} hours)
           </div>
         </div>
         
@@ -156,22 +242,23 @@
         <div>• Reservoir evaporation: ${fmt(evapWeekly)} mL/week (${evapRate} mm/day)</div>
         <div>• Total weekly loss (plant + evaporation): ${fmt(totalWeeklyLoss)} mL/week</div>
         <div>• ${reservoirLiters} L reservoir lasts approximately <strong>${weeksUntilEmpty.toFixed(1)} weeks</strong></div>
-        
-        <div style="margin-top:10px;color:var(--muted);font-size:12px">
-          Note: Timer setting is based on plant needs only. Evaporation from reservoir affects refill frequency.
-        </div>
+        ${warnings}
       `;
 
-      formulaEl.textContent = `Timer: Cycles/week = PlantNeeds ÷ ${ML_PER_CYCLE.toFixed(2)}; Interval = ${HOURS_PER_WEEK} ÷ Cycles/week | Reservoir: Weeks = Capacity ÷ (PlantNeeds + Evaporation)`;
+      formulaEl.textContent = `Weekly = PotArea × HeightScale^0.5 × TempFactor^(T-20) × HumidityAdj × LightFactor × BaseSeasonal | Interval = ${mlPerWatering}mL per ${intervalHours.toFixed(1)} hours`;
     });
 
     resetBtn.addEventListener('click', ()=>{
+      potDiameterEl.value = 30;
       lengthEl.value = 30; 
+      tempEl.value = 20;
       seasonEl.value = 'summer'; 
       rhEl.value = 45; 
       rhVal.textContent = '45%'; 
+      lightEl.value = 1.0;
       evapEl.value = 1.5; 
-      reservoirEl.value = 13; 
+      reservoirEl.value = 15; 
+      mlPerWateringEl.value = 105;
       results.innerHTML = 'Enter values and press Calculate.'; 
       formulaEl.textContent = '';
     });
